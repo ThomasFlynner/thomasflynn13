@@ -1,0 +1,1445 @@
+---
+title: "Data Visualisation & Analytics Project"
+author: "Thomas Flynn"
+date: "2024-02-27"
+output: html_document
+---
+These are the necessary packages. Please if running code, run in order to avoid any problems and it is recommended to run each chunk separately.If you try to run it all at once it stops after the shiny app due to warning. This is the link to the published shiny app - https://thomasflynner.shinyapps.io/Data_Visualisation/
+```{r Packages}
+#install.packages("ggplot2")
+library(ggplot2)
+#install.packages("tidyverse")
+library(tidyverse)
+#install.packages("devtools")
+library(devtools)
+#install.packages("extrafont")
+library(extrafont)
+#install.packages("cowplot")
+library(cowplot)
+#install.packages("plotly")
+library(shiny)
+library(plotly)
+#install.packages("psych")
+library(psych)
+#install.packages("gganimate")
+library(gganimate)
+library(gifski)
+#install.packages("ggrepel")
+library(ggrepel)
+#install.packages("magick")
+library(magick)
+#install.packages("leaflet")
+library(leaflet)
+#install.packages("maps")
+library(maps)
+```
+
+
+Loading the data, cleaning, and filtering as needed.
+```{r Loading and Filtering}
+getwd()
+#getting the working directory
+setwd("C:/Users/Thomas/Downloads/Data Science Semester 1 Modules/Data Science All Modules/Stats and Prob/Semester 2 Data Science/Data Analytics & Visualisation") #setting working directory
+data <- read.csv("NBA_2023_Shots.csv") # Reading in the CSV file
+head(data$GAME_DATE) # Checking if Game Date column was in Date format
+# Converting Game Date to Date format
+data$GAME_DATE <- as.Date(data$GAME_DATE, format = "%m-%d-%Y")
+# Checking the structure to confirm the change
+str(data)
+summary(data$GAME_DATE)
+# Defining the start and end dates for the Denver Nuggets 2022-23 Regular Season
+start_date <- as.Date("2022-10-19")
+end_date <- as.Date("2023-04-9")
+# Filtering for the Denver Nuggets only and the specified date range
+filtered_df <- data %>%
+  filter(TEAM_NAME == "Denver Nuggets", GAME_DATE >= start_date, GAME_DATE <= end_date)
+
+sum(is.na(filtered_df))#checking NA'S
+sum(duplicated(filtered_df))# Checking duplicates
+
+# Getting numeric columns
+num_columns <- sapply(filtered_df, is.numeric)
+
+# Loop through numeric columns for outliers
+for(col in names(num_columns)[num_columns]) {
+  Q1 <- quantile(filtered_df[[col]], 0.25, na.rm = TRUE)
+  Q3 <- quantile(filtered_df[[col]], 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR
+  upper_bound <- Q3 + 1.5 * IQR
+  
+  # getting outliers
+  outliers <- filtered_df[[col]][filtered_df[[col]] < lower_bound | filtered_df[[col]] > upper_bound]
+  
+  # 
+  if(length(outliers) > 0) {
+    cat("Outliers in", col, ":\n")
+    #print(outliers)
+  }
+}#only outliers were shot locations and distance which were legitimate entries and not errors
+
+# Adding new column that will have the home team against the away team and the date of the game
+filtered_df$game_selection <- with(filtered_df, paste(HOME_TEAM, "vs", AWAY_TEAM, "-", GAME_DATE))
+
+```
+
+
+The court details which were implemented from the work of toddwschneider on GitHub. Needed for Shiny App
+```{r Court Details}
+bg_color = '#000004' #the background colour for the basketball court
+# Function to get a set of points that form a circle based on center, radius and number of points
+circle_points = function(center = c(0, 0), radius = 1, npoints = 360) {
+  angles = seq(0, 2 * pi, length.out = npoints)
+  # Calculating x and y coords for each point on the circle and returning them
+  return(data_frame(x = center[1] + radius * cos(angles),
+                    y = center[2] + radius * sin(angles)))
+}
+
+
+# Creating a theme function for ggplot objects to look like a bball court
+theme_court = function(base_size = 16) { #size of font
+  theme_bw(base_size) +  #  basic black and white theme
+    theme(  
+      text = element_text(color = "#f0f0f0"),  # using light colour for visibility against dark background
+      plot.background = element_rect(fill = bg_color, color = bg_color),  # using the plot background colour
+      panel.background = element_rect(fill = bg_color, color = bg_color),  #using the plot background colour
+      panel.grid = element_blank(),  # Removing grid lines
+      panel.border = element_blank(),  # Removing panel border
+      axis.text = element_blank(),  # Hiding axis text
+      axis.title = element_blank(),  # Hiding axis titles
+      axis.ticks.length = unit(0, "lines"),  # Removing axis ticks
+      legend.background = element_rect(fill = bg_color, color = bg_color),  #legend background colour
+      legend.position = "bottom",  # Putting the legend at bottom
+      legend.key = element_blank(),  # Hiding the legend key backgrounds
+      legend.text = element_text(size = rel(1.0))  # the size of legend text
+    )
+}
+
+#constants for various dimensions of a bball court
+width = 50
+height = 94 / 2
+key_height = 19
+inner_key_width = 12
+outer_key_width = 16
+backboard_width = 6
+backboard_offset = 4
+neck_length = 0.5
+hoop_radius = 0.75
+hoop_center_y = backboard_offset + neck_length + hoop_radius
+three_point_radius = 23.75
+three_point_side_radius = 22
+three_point_side_height = 14
+
+##seasons for shorter three point-line. Not needed in this case but kept in.
+short_three_radius = 22
+short_three_seasons = c("1994-95", "1995-96", "1996-97")
+
+# Defining the court beginning with the perimeter
+court_points = data_frame(
+  x = c(width / 2, width / 2, -width / 2, -width / 2, width / 2), # x coordinates
+  y = c(height, 0, 0, height, height), # y coordinates
+  desc = "perimeter" #description of these points
+)
+# Adding the outer key, backboard, foul circle, hoop, restricted area and three point line with their dimensions
+court_points = bind_rows(court_points , data_frame( #using bind_rows() to combine
+  x = c(outer_key_width / 2, outer_key_width / 2, -outer_key_width / 2, -outer_key_width / 2),
+  y = c(0, key_height, key_height, 0),
+  desc = "outer_key" 
+))
+#the backboard and the hoop's neck.
+court_points = bind_rows(court_points , data_frame( 
+  x = c(-backboard_width / 2, backboard_width / 2),
+  y = c(backboard_offset, backboard_offset),
+  desc = "backboard" 
+))
+
+court_points = bind_rows(court_points , data_frame( 
+  x = c(0, 0), y = c(backboard_offset, backboard_offset + neck_length), desc = "neck"
+))
+
+# Using the circle_points function to draw the foul circle separating the top part
+foul_circle = circle_points(center = c(0, key_height), radius = inner_key_width / 2)
+
+# Filtering the foul circle above the key height to create the top part of the foul circle
+foul_circle_top = filter(foul_circle, y > key_height) %>%
+  mutate(desc = "foul_circle_top")  
+
+# Separate the bottom part of the foul circle with spacing
+foul_circle_bottom = filter(foul_circle, y < key_height) %>%
+  # Getting the angle for each point relative to the center of the circle
+  mutate(
+    angle = atan((y - key_height) / x) * 180 / pi,
+    #grouping angles to create divided lines for the bottom part of the foul circle
+    angle_group = floor((angle - 5.625) / 11.25),
+    desc = paste0("foul_circle_bottom_", angle_group)
+  ) %>%
+  filter(angle_group %% 2 == 0) %>% # Filtering out even number angle groups to create spacing
+  select(x, y, desc) # Selecting the x-coordinate y-coordinate and description columns
+
+# defining the hoop and its center and radius using the circle_points function
+hoop = circle_points(center = c(0, hoop_center_y), radius = hoop_radius) %>%
+  mutate(desc = "hoop")
+
+# Defining the restricted area using the circle_points function
+restricted = circle_points(center = c(0, hoop_center_y), radius = 4) %>%
+  # Filtering points to include those that are above or in line with the hoop center y-coordinate
+  filter(y >= hoop_center_y) %>%
+  mutate(desc = "restricted")
+
+# Making the 3 point line by combining an arc with straight lines
+three_point_circle = circle_points(center = c(0, hoop_center_y), radius = three_point_radius) %>%
+  # Filtering points to include above or at the three-point side height
+  filter(y >= three_point_side_height)
+
+# Create a circle representing the short three-point line
+short_three_circle = circle_points(center = c(0, hoop_center_y), radius = short_three_radius) %>%
+  # Filter points to include only those above or in line with  the hoop center y-coordinate
+  filter(y >= hoop_center_y)
+
+# making the three-point line using straight lines connecting points from the three-point circle
+three_point_line = data_frame(
+  # The x-coordinates for the three-point line
+  x = c(three_point_side_radius, three_point_side_radius, three_point_circle$x, -three_point_side_radius, -three_point_side_radius),
+  # the y-coordinates for the three-point line
+  y = c(0, three_point_side_height, three_point_circle$y, three_point_side_height, 0),
+  desc = "three_point_line"
+)
+# Now doing the same for the short three point line
+short_three_line = data_frame(
+  x = c(three_point_side_radius, three_point_side_radius, short_three_circle$x, -three_point_side_radius, -three_point_side_radius),
+  y = c(0, hoop_center_y, short_three_circle$y, hoop_center_y, 0),
+  # Description to indicate the short three-point line
+  desc = "short_three_line"
+)
+
+court_without_three = bind_rows(court_points , foul_circle_top, foul_circle_bottom, hoop, restricted)
+
+# Combining all the court elements with niormal three point line into a single dataset.
+court_points = bind_rows(court_without_three, three_point_line)
+
+#Doing the same with short three point line
+short_three_court_points = bind_rows(court_without_three, short_three_line)
+court = ggplot() +  # Start a ggplot
+  # Aadd geom_path using court_points data, with x and y coords and grouping by desc
+  geom_path(data = court_points,
+            aes(x = x, y = y, group = desc),
+            color = "#999999") +  # colour of the lines
+  coord_fixed(ylim = c(0, 35), xlim = c(-25, 25)) +  # to make sure that the aspect ratio of the plot remains fixed
+  theme_court(base_size = 22)  # applying the custom basketball court theme with base size of 22
+
+# Define a basketball court plot for short three-point line same methods as normal three-point line
+short_three_court = ggplot() +  
+  geom_path(data = short_three_court_points,
+            aes(x = x, y = y, group = desc),
+            color = "#999999") + 
+  coord_fixed(ylim = c(0, 35), xlim = c(-25, 25)) + #same as above
+  theme_court(base_size = 22)
+
+plot_court = function(court_theme = court_themes$dark, use_short_three = FALSE) {
+  if (use_short_three) {  # if using a short three-point line
+    three_point_radius = 22  # changing radius of three-point line
+    three_point_side_height = 0  # changing height of three-point line
+  }
+  # Defining court points data frame 
+  court_points = data_frame(
+    x = c(width / 2, width / 2, -width / 2, -width / 2, width / 2),
+    y = c(height, 0, 0, height, height),
+    desc = "perimeter"
+  )
+  #Adding Outer Key
+  court_points = bind_rows(court_points , data_frame(
+    x = c(outer_key_width / 2, outer_key_width / 2, -outer_key_width / 2, -outer_key_width / 2),
+    y = c(0, key_height, key_height, 0),
+    desc = "outer_key"
+  ))
+  #Adding Backboard
+  court_points = bind_rows(court_points , data_frame(
+    x = c(-backboard_width / 2, backboard_width / 2),
+    y = c(backboard_offset, backboard_offset),
+    desc = "backboard"
+  ))
+  # Adding neck of hoop
+  court_points = bind_rows(court_points , data_frame(
+    x = c(0, 0), y = c(backboard_offset, backboard_offset + neck_length), desc = "neck"
+  ))
+  # Getting the top part of foul circle
+  foul_circle = circle_points(center = c(0, key_height), radius = inner_key_width / 2)
+  foul_circle_top = filter(foul_circle, y > key_height) %>%
+    mutate(desc = "foul_circle_top")
+  
+  # Getting the bottom part of foul circle with angles for spaced lines
+  foul_circle_bottom = filter(foul_circle, y < key_height) %>%
+    mutate(
+      angle = atan((y - key_height) / x) * 180 / pi,  # Calculate the angle for each point
+      angle_group = floor((angle - 5.625) / 11.25),  # Group angles to create segmented lines
+      desc = paste0("foul_circle_bottom_", angle_group)
+    ) %>%
+    filter(angle_group %% 2 == 0) %>%  # Filtering to include only even angle groups
+    select(x, y, desc)  # Selecting x, y and desc columns
+  
+  # Getting the hoop points using the circle_points function
+  hoop = circle_points(center = c(0, hoop_center_y), radius = hoop_radius) %>%
+    mutate(desc = "hoop")  
+  
+  # Getting the restricted area points using the circle_points function
+  restricted = circle_points(center = c(0, hoop_center_y), radius = 4) %>%
+    filter(y >= hoop_center_y) %>%  # Filter to include only points above or in line with hoop center y-coord
+    mutate(desc = "restricted")
+  
+  # Getting the points to make the arc of the three-point line using circles
+  three_point_circle = circle_points(center = c(0, hoop_center_y), radius = three_point_radius) %>%
+    filter(y >= three_point_side_height, y >= hoop_center_y)
+  
+  # Creating a data frame for the three-point line
+  three_point_line = data_frame(
+    x = c(three_point_side_radius, three_point_side_radius, three_point_circle$x, -three_point_side_radius, -three_point_side_radius),  # The x-coords
+    y = c(0, three_point_side_height, three_point_circle$y, three_point_side_height, 0),  # The y-coords
+    desc = "three_point_line"  
+  )
+  # Combine all court parts into a df
+  court_points = bind_rows(
+    court_points,
+    foul_circle_top,
+    foul_circle_bottom,
+    hoop,
+    restricted,
+    three_point_line
+  )
+  court_points <<- court_points  # Making the combined court points back to the global environment
+  
+  # Plotting the court
+  ggplot() +
+    geom_path(
+      data = court_points,  # Using the court points
+      aes(x = x, y = y, group = desc),  # mapping the x and y coords and grouping by desc
+      color = court_theme$lines  # Again the colour of the lines
+    ) +
+    coord_fixed(ylim = c(0, 35), xlim = c(-25, 25)) +  # the fixed aspect ratio
+    theme_minimal(base_size = 22) +  # applying minimal theme
+    theme(
+      text = element_text(color = court_theme$text),  # appling the text colour
+      plot.background = element_rect(fill = court_theme$court, color = court_theme$court),  # background colour
+      panel.background = element_rect(fill = court_theme$court, color = court_theme$court),  #background colour
+      panel.grid = element_blank(),  # Removing grid lines
+      panel.border = element_blank(),  # Removing panel border
+      axis.text = element_blank(),  # Hiding axis text
+      axis.title = element_blank(),  # Hiding axis titles
+      axis.ticks = element_blank(),  # Removing axis ticks
+      legend.background = element_rect(fill = court_theme$court, color = court_theme$court),  #legend background
+      legend.margin = margin(-1, 0, 0, 0, unit = "lines"),  # Adjust the legends margins
+      legend.position = "bottom",  # Putting legend at bottom
+      legend.key = element_blank(),  # Hiding the legend key backgrounds
+      legend.text = element_text(size = rel(1.0))  # the size of legend text
+    )
+}
+
+
+court_themes = list(
+  light = list(
+    court = '#fffcf2',  #court background
+    lines = '#999999',  # Line colour 
+    text = '#222222',   # text colour
+    made = '#00bfc4',   # colour for made shots.
+    missed = '#f8766d',  # Color for missed shots
+    hex_border_size = 0.3,
+    hex_border_colour = "#cccccc"
+  ),
+  dark = list(
+    court = '#000004',  # Dark court background
+    lines = '#999999',  # Line colour
+    text = '#f0f0f0',   # text colour
+    made = '#00bfc4',   # colour for made shots
+    missed = '#f8766d',  # colour for missed shots
+    hex_border_size = 0,
+    hex_border_color = "#000000"
+  )
+)
+#Storing a base court
+base_court <- court
+base_court
+
+plot_court <- function() {
+  # Court Dimenons & lines
+  base_court
+}
+```
+
+
+Here are the Players Images URLs and team logos. Needed for the Shiny App
+```{r Player Images URL}
+# Player images URL list
+player_images <- list(
+  "Aaron Gordon" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/aaron%20gordon.png?raw=true",
+  "Jamal Murray" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Jamal%20Murray.png?raw=true",
+  "Kentavious Caldwell-Pope" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Kentavious%20Caldwell-Pope.png?raw=true",
+  "Michael Porter Jr." = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Michale%20Porter%20Jr..png?raw=true",
+  "Nikola Jokic" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Nikola%20Jokic.png?raw=true",
+  "Bruce Brown" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Bruce%20Brown.png?raw=true",
+  "Jeff Green" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Jeff%20green.png?raw=true",
+  "Bones Hyland" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/bones%20hyland.png?raw=true",
+  "Ish Smith" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/ish%20smith.png?raw=true",
+  "Vlatko Cancar" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/vlatko%20cancar.png?raw=true",
+  "Peyton Watson" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Peyton%20Watson.png?raw=true",
+  "Christian Braun" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Christian%20Braun.png?raw=true",
+  "DeAndre Jordan" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/DeAndre%20Jordan.png?raw=true",
+  "Davon Reed" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Davon%20Reed.png?raw=true",
+  "Zeke Nnaji" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/zeke.png?raw=true",
+  "Jack White" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/jack%20white.png?raw=true",
+  "Thomas Bryant" =  "https://github.com/ThomasFlynner/Nba-Logos/blob/main/thomas%20white.png?raw=true",
+  "Reggie Jackson" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Reggie%20Jackson.png?raw=true"
+)
+
+team_logos= c(
+  "Denver Nuggets" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Denver_Nuggets.svg.png?raw=true",
+  "New York Knicks"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/New_York_Knicks_logo.svg.png?raw=true",
+  "Brooklyn Nets" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/1200px-Brooklyn_Nets_newlogo.svg.png?raw=true",
+  "Dallas Mavericks" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Dallas_Mavericks_logo.svg.png?raw=true",
+  "Orlando Magic"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Orlando_Magic_logo.svg.png?raw=true",
+  "Atlanta Hawks"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Atlanta_Hawks_logo.svg.png?raw=true",
+  "Boston Celtics"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Boston_Celtics.svg.png?raw=true",
+  "Charlotte Hornets"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Charlotte_Hornets_(2014).svg.png?raw=true",
+  "Chicago Bulls" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Chicago_Bulls_logo.svg.png?raw=true",
+  "Cleveland Cavaliers"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Cleveland_Cavaliers_logo.svg.png?raw=true",
+  "Detroit Pistons" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Logo_of_the_Detroit_Pistons.svg.png?raw=true",
+  "Golden State Warriors" ="https://github.com/ThomasFlynner/Nba-Logos/blob/main/Golden_State_Warriors_logo.svg.png?raw=true",
+  "Houston Rockets" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Houston_Rockets.svg.png?raw=true",
+  "Indiana Pacers" = "https://raw.githubusercontent.com/ThomasFlynner/Nba-Logos/65734f15be6b6b462f5f8b2b086930f0407bf855/Indiana_Pacers.svg",
+  "Los Angeles Clippers" ="https://github.com/ThomasFlynner/Nba-Logos/blob/main/Los_Angeles_Clippers_(2015).svg.png?raw=true",
+  "Los Angeles Lakers" ="https://github.com/ThomasFlynner/Nba-Logos/blob/main/Los_Angeles_Lakers_logo.svg.png?raw=true",
+  "Memphis Grizzlies"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Memphis_Grizzlies.svg.png?raw=true",
+  "Miami Heat" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Miami_Heat_logo.svg.png?raw=true",
+  "Milwaukee Bucks" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Milwaukee_Bucks_logo.svg.png?raw=true",
+  "Minnesota Timberwolves" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Minnesota_Timberwolves_logo.svg.png?raw=true",
+  "New Orleans Pelicans" = "https://raw.githubusercontent.com/ThomasFlynner/Nba-Logos/558e464b6d128c09b9c8e4db5695f956197746ed/New_Orleans_Pelicans_logo.svg",
+  "Oklahoma City Thunder" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Oklahoma_City_Thunder.svg.png?raw=true",
+  "Philadelphia 76ers" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Philadelphia-76ers-Logo-1977-1996.png?raw=true",
+  "Phoenix Suns" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Phoenix_Suns_logo.svg.png?raw=true",
+  "Portland Trail Blazers"="https://github.com/ThomasFlynner/Nba-Logos/blob/main/Portland_Trail_Blazers_logo.svg.png?raw=true",
+  "Sacramento Kings"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/SacramentoKings.svg.png?raw=true",
+  "San Antonio Spurs" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/San_Antonio_Spurs.svg.png?raw=true",
+  "Toronto Raptors" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Toronto_Raptors_logo.svg.png?raw=true",
+  "Utah Jazz" = "https://raw.githubusercontent.com/ThomasFlynner/Nba-Logos/50e066b3e3f7ec4834025ac0eb19333a34e1748d/Utah_Jazz_logo_2022.svg",
+  "Washington Wizards" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Washington_Wizards_logo.svg.png?raw=true"
+)
+
+
+# Function to create custom icons for each team
+Icon_function <- function(url) {
+  makeIcon(
+    iconUrl = url,  # URL of the icon 
+    iconWidth = 40,  # Width of icon
+    iconHeight = 40,  # Height of icon 
+    iconAnchorX = 17.5,  # X-coordinate of the icon
+    iconAnchorY = 17.5  # Y-coordinate of the icon 
+  )
+}
+```
+
+
+Function for Heatmap. Needed for Shiny App
+```{r HeatMap Function}
+###Function for Shiny App 2 to generate Heatmap
+heatmap_function <- function(shots, base_court, use_short_three = FALSE, court_theme = court_themes$dark) {
+  # Check if using short three-point line
+  if (use_short_three) {
+    base_court <- short_three_court  # Set base court to short three-point court if specified
+  }
+  # Creating density heatmap of shot data
+  plot_court() +  # Adding the base court plot
+    stat_density_2d(  # Add 2D density estimation
+      data = shots,  # Use shot data
+      aes(x = LOC_X, y = LOC_Y, fill = stat(density / max(density))),  # for density fill of shot locations
+      geom = "raster", contour = FALSE, interpolate = TRUE, n = 200 #plot appearance using raster grid, with resolution set to 200
+    ) +
+    # Adding court lines
+    geom_path( 
+      data = court_points,  # court points data
+      aes(x = x, y = y, group = desc),
+      color = "#999999"  # line colour
+    ) +
+    # the colour scale for heatmap
+    scale_fill_viridis_c(  #using the viridis colour palette
+      "Shot Frequency    ",  # colour scale label
+      limits = c(0, 1),  # scale limits
+      breaks = c(0, 1),  # scale breaks
+      labels = c("lower", "higher"),  # colourscale labels
+      option = "inferno",  # colour scale option to inferno
+      guide = guide_colorbar(barwidth = 15)  #width of the bar
+    ) # Customize legend text size
+}
+```
+
+
+Code Preperation for Shiny App for Facet Plots of Denver Nuggets Player Performance Tab Needed for Shiny App
+```{r Code Preperation for Facet Plots of Denver Nuggets Player Performance for Shiny App}
+# Calculating the  shooting percentages
+filtered_df <- filtered_df %>%
+  mutate(
+    shot_made_numeric = ifelse(SHOT_MADE, 1, 0),# converting shot made to numeric 1= made & 0 = missed
+    shot_type = ifelse(SHOT_TYPE == "2PT Field Goal", "2-Point", "3-Point") # putting shots into categories of 2-point or 3-point
+  )
+
+# Getting the shooting percentages grouped by game date
+shooting_percentage <- filtered_df %>%
+  group_by(GAME_DATE) %>%
+  summarise(
+    overall_percentage = mean(shot_made_numeric), # overall shooting percentage
+    two_point_percentage = mean(shot_made_numeric[shot_type == "2-Point"]), # 2-point shooting percentage
+    three_point_percentage = mean(shot_made_numeric[shot_type == "3-Point"]) # 3-point shooting percentage
+  )
+
+# shooting performance for players for 2-pointers
+player_shooting_2pt <- filtered_df %>%
+  filter(SHOT_TYPE == "2PT Field Goal") %>% # filtering 2-point shots
+  group_by(PLAYER_NAME) %>%
+  summarise(
+    shooting_percentage_2pt = mean(shot_made_numeric), # shooting percentage for 2-point shots
+    total_points_2pt = sum(SHOT_MADE * 2), # total points scored from 2-point shots
+    POSITION = first(POSITION) # Getting players position
+  )
+
+#shooting performance for players for 3-point shots. Same as 2pointer's above but for 3 pointers
+player_shooting_3pt <- filtered_df %>%
+  filter(SHOT_TYPE == "3PT Field Goal") %>% 
+  group_by(PLAYER_NAME) %>%
+  summarise(
+    shooting_percentage_3pt = mean(shot_made_numeric),
+    total_points_3pt = sum(SHOT_MADE * 3),
+    POSITION = first(POSITION) 
+  )
+
+# Calculate shooting performance for for all shots. Same method as above
+player_shooting_all <- filtered_df %>%
+  group_by(PLAYER_NAME) %>% 
+  summarise( 
+    shooting_percentage_all = mean(shot_made_numeric), 
+    total_points_all = sum(SHOT_MADE * ifelse(SHOT_TYPE == "2PT Field Goal", 2, 3)), 
+    POSITION = first(POSITION) 
+  )
+
+# a full join to combine all data frames by player
+combined_data <- full_join(player_shooting_2pt, player_shooting_3pt, by = c("PLAYER_NAME", "POSITION"))
+combined_data <- full_join(combined_data, player_shooting_all, by = c("PLAYER_NAME", "POSITION"))
+
+# getting the average team shooting percentage for 2-pointers
+average_shooting_2pt <- mean(combined_data$shooting_percentage_2pt, na.rm = TRUE)
+print(average_shooting_2pt)
+
+# getting the average team shooting percentage for 3-pointers
+average_shooting_3pt <- mean(combined_data$shooting_percentage_3pt, na.rm = TRUE)
+print(average_shooting_3pt)
+
+# getting the average team shooting percentage for all shots
+average_shooting_all <- mean(combined_data$shooting_percentage_all, na.rm = TRUE)
+print(average_shooting_all)
+
+# Ordering players based on their overall shooting percentage
+combined_data <- combined_data %>% #Changing player name column into a factor 
+  mutate(PLAYER_NAME = factor(PLAYER_NAME, levels = PLAYER_NAME[order(-shooting_percentage_all)])) #based on shooting_percentage_all, but in descending order
+
+# Create a long-format dataframe for plotting
+shooting_percentage_long_format <- combined_data %>%  # applying pipeline 
+  pivot_longer(cols = c(shooting_percentage_2pt, shooting_percentage_3pt, shooting_percentage_all),  # changing data from wide to long format using shooting percentage columns
+               names_to = "Shot_Type",  # the new column name for shot type
+               values_to = "Shooting_Percentage") %>%  #the new column name for shooting percentages
+  mutate(Shot_Type = recode(Shot_Type,  # Mutate the Shot_Type column to rename 
+                            shooting_percentage_2pt = "2-Point",  # naming shooting percentage type for 2-point shots
+                            shooting_percentage_3pt = "3-Point",  # naming shooting percentage type for 3-point shots
+                            shooting_percentage_all = "Overall")) %>%  # naming shooting percentage type for overall shooting percentage
+  ungroup()  # dropping any grouping done before
+
+total_points_long_format <- combined_data %>%  # the same as above but now for points instead of shooting percentage
+  pivot_longer(cols = c(total_points_2pt, total_points_3pt, total_points_all),  #changing data from wide to long format using total points columns
+               names_to = "Shot_Type", 
+               values_to = "Total_Points") %>%  
+  mutate(Shot_Type = recode(Shot_Type,  
+                            total_points_2pt = "2-Point", 
+                            total_points_3pt = "3-Point", 
+                            total_points_all = "Overall")) %>%   
+  ungroup() 
+
+# order players by total points scored overall
+player_order <- total_points_long_format %>% 
+  filter(Shot_Type == "Overall") %>% 
+  arrange(desc(Total_Points)) %>%  # order from highest to lowest fro total points column
+  select(PLAYER_NAME) %>%  # Selecting the PLAYER_NAME column
+  pull(PLAYER_NAME)  # making it a vector
+
+# Now use this order to factor the PLAYER_NAME column
+total_points_long_format$PLAYER_NAME <- factor(  # Convert PLAYER_NAME column to a factor
+  total_points_long_format$PLAYER_NAME,  #
+  levels = player_order  # Order levels based on player_order
+)
+
+#average team shooting percentage for 2-point shots
+average_points_2pt <- mean(combined_data$total_points_2pt, na.rm = TRUE)  #getting the mean of total_points_2pt column
+print(average_points_2pt) 
+
+# average team shooting percentage for 3-point shots
+average_points_3pt <- mean(combined_data$total_points_3pt, na.rm = TRUE)  #getting the  mean of total_points_3pt column
+print(average_points_3pt) 
+
+#average team shooting percentage for all shots
+average_points_all <- mean(combined_data$total_points_all, na.rm = TRUE)  # getting the  mean of total_points_all column
+print(average_points_all) 
+
+max_points_2pt <-max(total_points_long_format$Total_Points[total_points_long_format$Shot_Type == "2-Point"], na.rm = TRUE)# getting the max points for breaks
+max_points_3pt <- max(total_points_long_format$Total_Points[total_points_long_format$Shot_Type == "3-Point"], na.rm = TRUE)
+max_points_overall <- max(total_points_long_format$Total_Points[total_points_long_format$Shot_Type == "Overall"], na.rm = TRUE)
+
+max_points <- max(c(max_points_2pt, max_points_3pt, max_points_overall))
+
+# chnage breaks depending on point size in bar charts
+general_breaks <- if (max_points <= 1000) {
+  seq(0, max_points, by = 100)
+} else {
+  seq(0, max_points, by = 200)
+}
+
+```
+
+
+Code Preperation for Shiny App for Denver Nuggets Team Performance Home vs. Away Tab
+```{r Code Preperation for Shiny App for Denver Nuggets Team Performance Home vs. Away Tab}
+# adding variable for if a denver game was played at home or away
+filtered_df <- filtered_df %>%
+  mutate(
+    Home_Away = ifelse(HOME_TEAM == "DEN", "Home", "Away")
+  )
+
+# getting shooting percentages for whether game was Home/Away and using GAME_DATE
+shooting_percentage_home_away <- filtered_df %>%
+  group_by(Home_Away, GAME_DATE) %>%
+  summarise(
+    # getting the overall shooting percentage for each Home/Away game and date
+    overall_percentage = mean(shot_made_numeric, na.rm = TRUE),
+    # dropping the grouping
+    .groups = 'drop'
+  )
+
+# getting total points for Home/Away and GAME_DATE
+total_points_home_away <- filtered_df %>%
+  group_by(Home_Away, GAME_DATE) %>%
+  summarise(
+    # getting the total points scored for each Home/Away game and date
+    total_points = sum(SHOT_MADE * ifelse(SHOT_TYPE == "2PT Field Goal", 2, 3), na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# getting the cumulative averages for Home games
+home_data <- shooting_percentage_home_away %>%
+  filter(Home_Away == "Home") %>%  # Filtering for Home games
+  arrange(GAME_DATE) %>%            # arrange by GAME_DATE
+  mutate(Cumulative = cummean(overall_percentage))  # getting cumulative mean shooting percentage
+
+# Now doing the same but for Away games
+away_data <- shooting_percentage_home_away %>%
+  filter(Home_Away == "Away") %>%  
+  arrange(GAME_DATE) %>%          
+  mutate(Cumulative = cummean(overall_percentage)) 
+
+# Merge home and away for plotting
+combined_cumulative_data <- bind_rows(home_data, away_data) %>%  
+  arrange(GAME_DATE, Home_Away)  # Arrange by GAME_DATE and Home_Away
+
+# Getting the cumulative sums for Home games
+home_data_points <- total_points_home_away %>%
+  filter(Home_Away == "Home") %>%  # Filter data for Home games
+  arrange(GAME_DATE) %>%            # now arrange data by GAME_DATE
+  mutate(Cumulative = cumsum(total_points))  # now getting the cumulative sum of total points
+
+# Now getting cumulative sums for away games
+away_data_points <- total_points_home_away %>%
+  filter(Home_Away == "Away") %>%  
+  arrange(GAME_DATE) %>%            
+  mutate(Cumulative = cumsum(total_points))
+
+# Merge home and away data 
+home_away_data <- bind_rows(home_data_points, away_data_points) %>%  # Combine Home&Away 
+  arrange(GAME_DATE, Home_Away)
+
+# Get the average points per game for Home and Away
+average_points_per_game <- total_points_home_away %>%
+  group_by(Home_Away, GAME_DATE) %>%                
+  summarise(Average_Points = mean(total_points), .groups = 'drop')  # get mean total points per game
+
+# Get cumulative averages for Home and Away
+average_points_per_game <- average_points_per_game %>%
+  arrange(Home_Away, GAME_DATE) %>% 
+  group_by(Home_Away) %>%             
+  mutate(Cumulative_Average = cummean(Average_Points))  # get cumulative mean of Average_Points
+
+# For Cumulative Average Shooting Percentage Per Game
+combined_cumulative_data <- combined_cumulative_data %>%
+  mutate(Cumulative = round(Cumulative, 4))  # Round here
+
+
+# For Cumulative Average Total Points Per Game
+average_points_per_game <- average_points_per_game %>%
+  mutate(Cumulative_Average = round(Cumulative_Average, 2)) # Round here
+
+# Define a common theme for ggplot objects
+common_theme <- theme_light(base_size = 14) + 
+  theme(
+    plot.title = element_text( size = 20),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+
+Shiny App code. It contains four different tabs. All previous code needs to be ran prior. There is a Warning: Ignoring unknown aesthetics: text but despite the warning the code still runs perfectly. Make sure to continue running the rest of the code once done with shiny app.This is the link to the publish shiny app- https://thomasflynner.shinyapps.io/Data_Visualisation/
+```{r Shiny App containing four different tabs}
+# The UI Layout
+ui <- fluidPage(
+  titlePanel("Denver Nuggets Shiny App"), #the title for title panel
+  
+  # adding a tabset panel to the UI layout
+  tabsetPanel(
+    # adding the first tab Shot Charts to the tabset panel
+    tabPanel("Shot Charts", 
+             # Add a title panel within the "Shot Charts" tab
+             titlePanel(
+               # Createing a div to hold the image and the title for the shot chart
+               div(
+                 img(src = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Denver_Nuggets.svg.png?raw=true", height = "50px"),
+                 "Denver Nuggets Regular Season - Player Shot Chart"
+               )
+             ),
+             # Adding a sidebar layout
+             sidebarLayout(
+               # Adding a sidebar panel
+               sidebarPanel(
+                 # Add a select input for selecting a player from PLAYER_NAME
+                 selectInput("selected_player", "Select a Player:", choices = unique(filtered_df$PLAYER_NAME)),
+                 # Add a select input for selecting multiple games from game_selection
+                 selectInput("selected_game", "Select Games:", 
+                             choices = as.character(unique(filtered_df$game_selection)),
+                             selected = as.character(unique(filtered_df$game_selection)[1]),
+                             multiple = TRUE),
+                 # Added a fluid row for checkbox group inputs for filtering by zone range & shot outcome
+                 fluidRow( #this allows the checkbox groups to be side by side
+                   # Column with a checkbox group input for filtering by zone range
+                   column(6,  
+                          checkboxGroupInput("zone_range_filter", "Filter by Zone Range:",
+                                             choices = unique(filtered_df$ZONE_RANGE),
+                                             selected = NULL)),
+                   # Column with a checkbox group input for filtering by shot outcome
+                   column(6,  
+                          checkboxGroupInput("shot_filter", "Filter Shots:", 
+                                             choices = list("Scored" = "TRUE", "Missed" = "FALSE"),
+                                             selected = c("TRUE", "FALSE")))
+                 ),
+                 # Adding in a slider input for filtering by shot distance
+                 sliderInput("shot_distance_filter", "Filter by Shot Distance (ft):", min = 0, max = 100, value = c(0, 30)),
+                 # Added in a checkbox input for toggling between showing total season or not
+                 checkboxInput("total_season", "Show Total Season", value = FALSE),
+                 # text output for displaying shot summary
+                 textOutput("shot_summary"),
+                 # UI output for displaying player image
+                 uiOutput("player_image")
+               ),
+               # The main panel for displaying the shot chart plot
+               mainPanel(
+                 plotlyOutput("courtPlot", width = "100%", height = "600px")
+               )
+             )
+    ),
+    
+    tabPanel("Heatmap",  
+         # Add a title panel for the Heatmap tab
+         titlePanel(  
+           # 
+           div(
+             img(src = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Denver_Nuggets.svg.png?raw=true", height = "50px"),
+             "Denver Nuggets Regular Season - Player Season Shot Heatmap"
+           )
+         ),
+         # Adding a sidebar layout
+         sidebarLayout(
+           # Adding a sidebar panel 
+           sidebarPanel( 
+             #  select input for choosing a player from player_images
+             selectInput(inputId = "player_name",  # Drop down menu
+                             label = "Choose a player:",
+                             choices = c("Select a player" = "", names(player_images)),
+                             selected = names(player_images)[1]),
+             # Adding a checkbox group input for excluding zones using unique BASIC_ZONE
+             checkboxGroupInput(inputId = "excluded_zones",  
+                                label = "Exclude Zones:",
+                                choices = unique(filtered_df$BASIC_ZONE)),
+             # dynamic UI output for displaying player image
+             uiOutput("player_img")
+           ),
+           #main panel for displaying the heatmap plot
+           mainPanel( 
+             plotOutput(outputId = "heatmap", width = "100%", height = "600px")
+           )
+         )
+),
+    
+    tabPanel("Player Performance", 
+                      # Adding a title panel in Player Performance
+             titlePanel(
+               div(
+                 img(src = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Denver_Nuggets.svg.png?raw=true", height = "50px"),
+                 "Denver Nuggets Player Performance"
+               )
+             ),
+             # sidebar layout
+             sidebarLayout(
+               # Adding a sidebar panel
+               sidebarPanel(
+                 # Adding dropdown menu for selecting metric
+                 selectInput("metric", "Choose a Metric:",
+                             choices = c("Shooting Percentage" = "percentage", "Total Points" = "points")), width =2
+               ),
+               #Adding a main panel for displaying the plot
+               mainPanel(
+                 plotlyOutput("performancePlot", width = "100%", height = "700px"), width=10
+               )
+             )
+    ),
+    
+    tabPanel("Team Performance", 
+         # Adding a title panel in Team Performance
+         titlePanel(
+           # Create a div for image and a title for team performance
+           div(
+             img(src = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Denver_Nuggets.svg.png?raw=true", height = "50px"),
+             "Denver Nuggets Team Performance Home vs. Away"
+           )
+         ),
+         # sidebar layout
+         sidebarLayout(
+           # Adding a sidebar panel
+           sidebarPanel(
+             # adding radio buttons for selecting the plot type
+             radioButtons("plotType", "Select Plot Type",
+                          choices = c("Cumulative Average Shooting Percentage Per Game",
+                                      "Cumulative Total Points for Regular Season",
+                                      "Cumulative Average Total Points Per Game")), width= 3
+           ),
+           # Adding a main panel for displaying the plot
+           mainPanel(
+             plotlyOutput("plot", width = "100%", height = "550px"), width = 9
+           )
+         )
+    )
+  )
+)
+
+# The server logic for the Shiny App
+server <- function(input, output, session) {
+  
+  # Reactive expression for the filtered data
+  filtered_data <- reactive({
+    # Seeing if no player are selected
+    if (identical(input$selected_player, "")) {
+      return(NULL)  # Returns NULL if no player is selected
+    }
+    
+    # filtering data based on player selection and total season option
+    df <- if (input$total_season) {
+      filtered_df %>% filter(PLAYER_NAME == input$selected_player)  # Filter data for the selected player for the entire season
+    } else if (length(input$selected_game) > 0) {
+      selected_dates <- sapply(input$selected_game, function(game) {
+        strsplit(game, " - ")[[1]][2]  # getting game dates from the selected games
+      })
+      filtered_df %>% filter(PLAYER_NAME == input$selected_player, GAME_DATE %in% selected_dates)  # Filtering for the selected player and game dates
+    } else {
+      return(data.frame())  # Return empty data frame if nothing is selected
+    }
+    
+    # Filtering based on shot outcome depending of if scored or missed is picked
+    if (!identical(input$shot_filter, c("TRUE", "FALSE"))) {
+      df <- df %>% filter(as.character(SHOT_MADE) %in% input$shot_filter)
+    }
+    
+    # Filtering based on zone range
+    if (length(input$zone_range_filter) > 0) {
+      df <- df %>% filter(ZONE_RANGE %in% input$zone_range_filter)
+    }
+    
+    if (!is.null(input$shot_distance_filter)) {
+      df <- df %>% filter(SHOT_DISTANCE >= input$shot_distance_filter[1] & SHOT_DISTANCE <= input$shot_distance_filter[2])
+    }
+    
+    df  # returning the filtered data
+  })
+  
+  # Output for shot summary
+  output$shot_summary <- renderText({
+    data <- filtered_data()  # Get filtered data
+    if (is.null(data)) {
+      return("Please select a player.")  # Display message if no player is selected
+    }
+    
+    if (nrow(data) == 0) {
+      return("No shots to display.")  # Display message if no shots are available
+    }
+    
+    shots_made <- sum(data$SHOT_MADE == "TRUE")  # sum the shots made
+    shots_attempted <- nrow(data)  # Total shots attempted
+    shooting_percentage <- round((shots_made / shots_attempted) * 100, 2)  #getting shooting percentage
+    
+    #text output for shot summary
+    paste("Shots Made: ", shots_made, 
+          "| Shots Attempted: ", shots_attempted,
+          "| Shooting Percentage: ", shooting_percentage, "%")
+  })
+  
+  # Rendering player image
+  output$player_image <- renderUI({
+    if (!is.null(input$selected_player) && input$selected_player != "") {
+      # Get image source URL for selected player
+      img_src <- player_images[[input$selected_player]]
+      if (!is.null(img_src)) {
+        img(src = img_src, height = "200px", width = "auto")  # to display the player image
+      } else {
+        "Player image not available"  # if image URL is not found
+      }
+    }
+  })
+  
+  # Plot output for shot chart
+  output$courtPlot <- renderPlotly({
+    data <- filtered_data()  # Get filtered data
+    if (is.null(data)) {
+      return(NULL)  # returns NULL if no data available
+    }
+    
+    if (nrow(data) == 0) {
+      return(ggplot() + 
+               annotate("text", x = 0, y = 0, label = "No shots to display", 
+                        size = 5, colour = "red", hjust = 0.5, vjust = 0.5) +
+               theme_void()) # the shown message if no shots are available
+    }
+    
+    shots_made <- sum(data$SHOT_MADE == "TRUE")  # sum shots made
+    shots_missed <- sum(data$SHOT_MADE == "FALSE")  # sum shots missed
+    summary_label <- paste("Shots Made:", shots_made, 
+                           "| Shots Missed:", shots_missed,
+                           "| Shooting Percentage:", 
+                           round((shots_made / (shots_made + shots_missed)) * 100, 2), "%")  # the summary label which is shooting percentage
+    
+    plot1 <- plot_court() +  # basketball court plot
+  geom_point(data = data,  # adding points
+             aes(x = LOC_X, y = LOC_Y,  # x and y coords for shots
+                 fill = as.factor(SHOT_MADE),  # fill based on if shot was made or not
+                 text = paste("Shot Type: ", ACTION_TYPE,  # tooltip text for shot type
+                              "<br>Scored: ", SHOT_MADE,  # tooltip text for shot outcome
+                              "<br>Distance: ", SHOT_DISTANCE, "ft",  # tooltip text for shot distance
+                              "<br>Game and Date: ", game_selection)),  # tooltip text for game and date
+             shape = 21,  # point shape 
+             color = "black",  # point outline color
+             size = 3,  # point size
+             alpha = 0.7,  # point transparency
+             stroke = 0.25) +  # point outline width
+  scale_fill_manual(values = c("TRUE" = "green", "FALSE" = "red"),  # colour scale for shot outcome
+                    labels = c("TRUE" = "Scored", "FALSE" = "Missed"),  # Labels for legend
+                    name = "Shot Outcome") +  # Colour scale for shot 
+                    guides(fill = "none")  # Remove legend for shot outcome
+    
+    ggplotly(plot1, tooltip = "text") %>%  # CHANGINGto plotly and specifying tooltip
+  layout( 
+    annotations = list(  
+      list(  
+        x = .5,  # X position 
+        xref = 'paper',  # reference for x position 
+        y = 1,  # Y position relative to the paper 
+        yref = 'paper',  # reference for y position
+        text = summary_label,  # Text content of the annotation
+        showarrow = FALSE,  # no arrow for the annotation
+        font = list( 
+          family = "Arial, sans-serif",  # Font type
+          size = 14,  # Font size
+          color = "white"  # Font colour
+        ),
+        xanchor = 'center',  # Horizontal alignment
+        yanchor = 'top',  # Vertical alignment
+        align = 'center'  # Alignment of text
+      )
+    )
+  ) 
+  })
+  
+  # Reactive expression for filtered data in Heatmap tab
+  filtered_data_heatmap <- reactive({
+    if (input$player_name == "") {
+      return(NULL)  #NULL if no player is picked
+    }
+    
+    shots <- filtered_df %>%
+      filter(PLAYER_NAME == input$player_name)  # Filter based on picked player
+    
+    if (length(input$excluded_zones) > 0) {
+      shots <- shots %>%
+        filter(!BASIC_ZONE %in% input$excluded_zones)  # Exclude selected zones
+    }
+    shots  # Returns filtered data
+  })
+  
+  # Render the heatmap plot
+  output$heatmap <- renderPlot({
+    player_data <- filtered_data_heatmap()  # Getting the filtered data
+    if (is.null(player_data)) {
+      return(NULL)  # returns NULL if no data is available
+    }
+    
+    heatmap_function(player_data, base_court, court_theme = court_themes$dark)  # Generate heatmap chart function
+  })
+  
+  # Reactive output for player image in Heatmap tab
+  output$player_img <- renderUI({
+    if (input$player_name != "") {
+      img_src <- player_images[[input$player_name]]  # getting the image URL for selected player
+      img(src = img_src, height = "200px", width = "auto")  # displaying the players image
+    }
+  })
+  
+  output$performancePlot <- renderPlotly({
+  if (input$metric == "percentage") {  # To see if selected metric is percentage
+    plot2 <- ggplot(shooting_percentage_long_format, aes(x = PLAYER_NAME, y = Shooting_Percentage, fill = PLAYER_NAME,  # Creating ggplot
+                                        text = paste("Player Name:", PLAYER_NAME, "<br>Player Position:",  # The tooltip text with player details
+                                                     POSITION, "<br>Shooting Percentage:",
+                                                     round(Shooting_Percentage * 100, 2), "%"))) +
+      geom_bar(stat = "identity", show.legend = FALSE) +  # Add bar plot with identity stat
+      facet_wrap(~ Shot_Type, scales = "free_y", ncol = 1) +  # Creating facet plot by Shot_Type with free y-axis scales and 1 column
+      labs(title = "Denver Nuggets - 2022-23 Season Shooting Performance by Player",  # Setting the plot labels and title
+           x = "Player", 
+           y = "Shooting Percentage") + 
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),  # The x-axis text angle and alignment
+            axis.title.y = element_text(margin = margin(r = 8)))
+      
+      plot2 <- plot2 + geom_hline(data = subset(shooting_percentage_long_format, Shot_Type == "2-Point"),  # horizontal line for 2-Point average shooting percentage
+                    aes(yintercept = average_shooting_2pt), linetype = "dashed", color = "#377eb8", size = 0.5) +  # colour, size and type for 2-Point line
+      geom_hline(data = subset(shooting_percentage_long_format, Shot_Type == "3-Point"),  #horizontal line for 3-Point average shooting percentage
+                 aes(yintercept = average_shooting_3pt), linetype = "dashed", color = "#377eb8", size = 0.5) +  
+      geom_hline(data = subset(shooting_percentage_long_format, Shot_Type == "Overall"),  # horizontal line for overall average shooting percentage
+                 aes(yintercept = average_shooting_all), linetype = "dashed", color = "#377eb8", size = 0.5)
+
+      second_last_player <- max(as.numeric(factor(combined_data$PLAYER_NAME))) - 1  #Getting  the index of the second last player for a reference point for the following geom_text
+
+      
+      plot2 <- plot2 + geom_text(data = subset(shooting_percentage_long_format, Shot_Type == "2-Point"),  # The text label for 2-Point team average shooting percentage
+                   aes(x = second_last_player, y = average_shooting_2pt, label = "⁃ ⁃ ⁃ ⁃  Team Average 2-Point% (54%)"), 
+                   nudge_x = -1, nudge_y = 0.2,  # Adjust label position
+                   hjust = 0, vjust = 0,  # Set horizontal and vertical justification
+                   color = "#377eb8", size = 3.5, angle = 0, check_overlap = TRUE) +  # text appearance
+      geom_text(data = subset(shooting_percentage_long_format, Shot_Type == "3-Point"),  # for 3-Point team average shooting percentage
+               aes(x = second_last_player, y = average_shooting_3pt, label = "⁃ ⁃ ⁃ ⁃  Team Average 3-Point% (38.9%)"),  
+               nudge_x = -1, nudge_y = 0.55,  
+               hjust = 0, vjust = 0,  
+               color = "#377eb8", size = 3.5, angle = 0, check_overlap = TRUE) +  
+      geom_text(data = subset(shooting_percentage_long_format, Shot_Type == "Overall"),  #for Overall team average shooting percentage
+               aes(x = second_last_player, y = average_shooting_2pt, label = "⁃ ⁃ ⁃ ⁃  Team Average Overall% (48.6%)"),  
+               nudge_x = -1, nudge_y = 0.2, 
+               hjust = 0, vjust = 0,  
+               color = "#377eb8", size = 3.5, angle = 0, check_overlap = TRUE)  
+      ggplotly(plot2, tooltip = "text")  # Changing ggplot to plotly and set tooltip to display text
+
+      
+    } else {
+      plot3 <- ggplot(total_points_long_format, aes(x = PLAYER_NAME, y = Total_Points, fill = PLAYER_NAME,  # ggplot object with Player Name, Total Points
+                                                          text = paste("Player Name:", PLAYER_NAME,  #text for tooltip with Player Name, Total Points, and Player Position
+                                                                       "<br>Total Points:", Total_Points, 
+                                                                       "<br>Player Position:", POSITION))) +
+                     geom_bar(stat = "identity", show.legend = FALSE) + 
+                     facet_wrap(~ Shot_Type, scales = "free_y", ncol = 1) + 
+                     labs(title = "Denver Nuggets - 2022-23 Season Total Points by Player",  
+                          x = "Player",
+                          y = "Total Points") +
+                      scale_y_continuous(breaks = general_breaks) +
+                     theme(axis.text.x = element_text(angle = 45, hjust = 1),  
+                           axis.title.y = element_text(margin = margin(r = 5)))  
+      plot3 <- plot3 +  # adding horz lines indicating average total points for each shot type
+                      geom_hline(data = subset(total_points_long_format, Shot_Type == "2-Point"), #for 2-Point average total points
+                                 aes(yintercept = average_points_2pt), linetype = "dashed", color = "#377eb8", size = 0.5) +
+                      geom_hline(data = subset(total_points_long_format, Shot_Type == "3-Point"),  # for 3-Point average total points
+                                 aes(yintercept = average_points_3pt), linetype = "dashed", color = "#377eb8", size = 0.5) +
+                      geom_hline(data = subset(total_points_long_format, Shot_Type == "Overall"),  #for overall average total points
+                                 aes(yintercept = average_points_all), linetype = "dashed", color = "#377eb8", size = 0.5)
+  
+second_last_player <- max(as.numeric(factor(total_points_long_format$PLAYER_NAME))) - 1  
+
+plot3 <- plot3 +  # text for team average total points for each shot type
+                      geom_text(data = subset(total_points_long_format, Shot_Type == "2-Point"),  # Add text for 2-Point shot type
+                                aes(x = second_last_player, y = average_points_2pt, label = "⁃ ⁃ ⁃ ⁃  Team Average Total Points (289)"),
+                                nudge_x = -1, nudge_y = 800,
+                                hjust = 0, vjust = 0, 
+                                color = "#377eb8", size = 3.5, angle = 0, check_overlap = TRUE) +
+                      geom_text(data = subset(total_points_long_format, Shot_Type == "3-Point"),  
+                                aes(x = second_last_player, y = average_points_3pt, label = "⁃ ⁃ ⁃ ⁃  Team Average Total Points (162)"),
+                                nudge_x = -1, nudge_y = 350,  
+                                hjust = 0, vjust = 0,  
+                                color = "#377eb8", size = 3.5, angle = 0, check_overlap = TRUE) +
+                      geom_text(data = subset(total_points_long_format, Shot_Type == "Overall"), 
+                                aes(x = second_last_player, y = average_points_all, label = "⁃ ⁃ ⁃ ⁃  Team Average Total Points (451)"),
+                                nudge_x = -1, nudge_y = 800, 
+                                hjust = 0, vjust = 0, 
+                                color = "#377eb8", size = 3.5, angle = 0, check_overlap = TRUE)
+
+ggplotly(plot3, tooltip = "text")  # Change to plotly with tooltip for text
+    }
+  })
+  
+  output$plot <- renderPlotly({  
+  if (input$plotType == "Cumulative Average Shooting Percentage Per Game") {
+    # plot for cumulative average shooting percentage per game
+    plot4 <- ggplot(combined_cumulative_data, aes(x = GAME_DATE, y = Cumulative, color = Home_Away)) +
+      geom_line(size=1.2) +  # Add line plot
+      geom_point(size=1.5) +  # Add point markers
+      labs(title = "Cumulative Average Shooting Percentage Per Game",  # Setting plot labels
+           x = "Game Date", y = "Shooting Percentage",
+           color = "Location") +  # color legend label
+      scale_color_manual(values = c("Home" = "blue", "Away" = "red")) +  # custom colours for home and away
+      common_theme +  # The plot theme
+      expand_limits(y = c(0.45, 0.55))  # changing y-axis limits for better visualization
+      
+      # Make interactive using plotly
+      ggplotly(plot4)%>%  
+        layout(title= list(title= "Cumulative Average Shooting Percentage Per Game", font =list(size=20)),
+              yaxis = list(title = "Shooting Percentage", titlefont= list(size=16)),  
+               xaxis = list(title = "Game Date", titlefont= list(size=16)))
+      
+    } else if (input$plotType == "Cumulative Total Points for Regular Season") {
+      plot5 <- ggplot(home_away_data, aes(x = GAME_DATE, y = Cumulative, color = Home_Away)) +
+      geom_line(size=1.2) +  
+      geom_point(size=1.5) + 
+      labs(title = "Cumulative Total Points for Regular Season",  
+           x = "Game Date", y = "Points",
+           color = "Location") +  # Set colour legend label
+      scale_color_manual(values = c("Home" = "blue", "Away" = "red")) +  
+      common_theme +  
+      expand_limits(y = range(home_away_data$Cumulative) * c(0.9, 1.1)) 
+      ggplotly(plot5, tooltip = c("x", "y", "color")) %>%  
+      layout(title= list(title= "Cumulative Total Points for Regular Season", font =list(size=20)),
+        yaxis = list(title = "Cumulative Total Points", titlefont =list(size=16)),  
+         xaxis = list(title = "Game Date", titlefont= list(size=16)))  
+      
+    } else if (input$plotType == "Cumulative Average Total Points Per Game") {
+      plot6 <- ggplot(average_points_per_game, aes(x = GAME_DATE, y = Cumulative_Average, color = Home_Away)) +  
+      geom_line(size = 1.2) +  
+      geom_point(size = 1.5) +  
+      labs(title = "Cumulative Average Total Points Per Game", 
+           x = "Game Date", y = "Points") +
+      scale_color_manual(values = c("Home" = "blue", "Away" = "red"), name = "Location") + 
+      common_theme + 
+      expand_limits(y = range(average_points_per_game$Cumulative_Average) * c(0.9, 1.1)) 
+
+      ggplotly(plot6, tooltip = c("x", "y", "color")) %>%  
+        layout(title= list(title= "Cumulative Average Total Points Per Game", font =list(size=20)),
+              yaxis = list(title = "Cumulative Average Points", titlefont= list(size=16)),  
+               xaxis = list(title = "Game Date", titlefont= list(size=16))) 
+    }
+  })
+}
+
+# Run the app
+shinyApp(ui = ui, server = server)
+
+```
+
+
+The Next Piece of Code is preparation Code with some cleaning and feature engineering for Mapping of Denver Nuggets and their travel
+```{r Prep Code for mapping}
+getwd()
+setwd("C:/Users/Thomas/Downloads/Data Science Semester 1 Modules/Data Science All Modules/Stats and Prob/Semester 2 Data Science/Data Analytics & Visualisation")
+arena_data <- read.csv("arena_data.csv")
+
+arena_data <- arena_data %>%  # Updating arena names in the arena_data 
+  mutate(arena_name = case_when(  # Apply a conditional transformation to team names
+    teamname == "Miami Heat" ~ "Kaseya Center",  
+    teamname == "Orlando Magic" ~ "Kia Center",  
+    teamname == "San Antonio Spurs" ~ "Frost Bank Center",  
+    teamname == "Indiana Pacers" ~ "Gainbridge Fieldhouse",  
+    teamname == "Oklahoma City Thunder" ~ "Paycom Center",  
+    teamname == "Phoenix Suns" ~ "Footprint Center",  
+    teamname == "Denver Nuggets" ~ "Ball Arena",  
+    teamname == "Los Angeles Clippers" ~ "Crypto.com Arena", 
+    teamname == "Los Angeles Lakers" ~ "Crypto.com Arena",  
+    teamname == "Utah Jazz" ~ "Delta Center",  
+    TRUE ~ arena_name  # For all other teams, keep the original arena names
+  ))
+
+arena_data <- arena_data %>%  # Update arena_data 
+  mutate(
+    full_loc = paste(arena_name, str_extract(full_loc, ",.*"), sep = "")  # concantenating the two columns
+  )
+
+# getting distinct values from the HOME_TEAM column of the filtered_df
+distinct_home_teams <- filtered_df %>% 
+  distinct(HOME_TEAM) %>%  # Keep only unique values of HOME_TEAM
+  arrange(HOME_TEAM)      # arrange in alphabetical order
+
+print(distinct_home_teams)
+
+#  mapping from the three-letter abbreviations to the full team names like how they are in arena_data
+team_abbrev_mapping <- c(
+  "ATL" = "Atlanta Hawks",
+  "BOS" = "Boston Celtics",
+  "BKN" = "Brooklyn Nets",
+  "CHA" = "Charlotte Hornets",
+  "CHI" = "Chicago Bulls",
+  "CLE" = "Cleveland Cavaliers",
+  "DAL" = "Dallas Mavericks",
+  "DEN" = "Denver Nuggets",
+  "DET" = "Detroit Pistons",
+  "GSW" = "Golden State Warriors",
+  "HOU" = "Houston Rockets",
+  "IND" = "Indiana Pacers",
+  "LAC" = "Los Angeles Clippers",
+  "LAL" = "Los Angeles Lakers",
+  "MEM" = "Memphis Grizzlies",
+  "MIA" = "Miami Heat",
+  "MIL" = "Milwaukee Bucks",
+  "MIN" = "Minnesota Timberwolves",
+  "NOP" = "New Orleans Pelicans",
+  "NYK" = "New York Knicks",
+  "OKC" = "Oklahoma City Thunder",
+  "ORL" = "Orlando Magic",
+  "PHI" = "Philadelphia 76ers",
+  "PHX" = "Phoenix Suns",
+  "POR" = "Portland Trail Blazers",
+  "SAC" = "Sacramento Kings",
+  "SAS" = "San Antonio Spurs",
+  "TOR" = "Toronto Raptors",
+  "UTA" = "Utah Jazz",
+  "WAS" = "Washington Wizards"
+)
+
+# Use this mapping to create a new column with the full team names
+filtered_df$Full_Home_Team <- sapply(filtered_df$HOME_TEAM, function(abbrev) team_abbrev_mapping[abbrev])
+
+# Merge the dataframes using Full_Home_Team and teamname
+filtered_df <- merge(filtered_df, arena_data, by.x = "Full_Home_Team", by.y = "teamname", all.x = TRUE)
+
+# Check
+head(filtered_df)
+
+
+filtered_df <- filtered_df %>%
+  arrange(game_selection)
+
+filtered_df_unique <- filtered_df %>%
+  arrange(GAME_DATE) %>%  
+  group_by(GAME_DATE) %>%  # Group by game date
+  slice(1) %>%  # Keep only the first entry for each date
+  ungroup()
+
+team_logos= c(
+  "Denver Nuggets" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Denver_Nuggets.svg.png?raw=true",
+  "New York Knicks"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/New_York_Knicks_logo.svg.png?raw=true",
+  "Brooklyn Nets" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/1200px-Brooklyn_Nets_newlogo.svg.png?raw=true",
+  "Dallas Mavericks" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Dallas_Mavericks_logo.svg.png?raw=true",
+  "Orlando Magic"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Orlando_Magic_logo.svg.png?raw=true",
+  "Atlanta Hawks"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Atlanta_Hawks_logo.svg.png?raw=true",
+  "Boston Celtics"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Boston_Celtics.svg.png?raw=true",
+  "Charlotte Hornets"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Charlotte_Hornets_(2014).svg.png?raw=true",
+  "Chicago Bulls" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Chicago_Bulls_logo.svg.png?raw=true",
+  "Cleveland Cavaliers"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Cleveland_Cavaliers_logo.svg.png?raw=true",
+  "Detroit Pistons" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Logo_of_the_Detroit_Pistons.svg.png?raw=true",
+  "Golden State Warriors" ="https://github.com/ThomasFlynner/Nba-Logos/blob/main/Golden_State_Warriors_logo.svg.png?raw=true",
+  "Houston Rockets" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Houston_Rockets.svg.png?raw=true",
+  "Indiana Pacers" = "https://raw.githubusercontent.com/ThomasFlynner/Nba-Logos/65734f15be6b6b462f5f8b2b086930f0407bf855/Indiana_Pacers.svg",
+  "Los Angeles Clippers" ="https://github.com/ThomasFlynner/Nba-Logos/blob/main/Los_Angeles_Clippers_(2015).svg.png?raw=true",
+  "Los Angeles Lakers" ="https://github.com/ThomasFlynner/Nba-Logos/blob/main/Los_Angeles_Lakers_logo.svg.png?raw=true",
+  "Memphis Grizzlies"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Memphis_Grizzlies.svg.png?raw=true",
+  "Miami Heat" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Miami_Heat_logo.svg.png?raw=true",
+  "Milwaukee Bucks" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Milwaukee_Bucks_logo.svg.png?raw=true",
+  "Minnesota Timberwolves" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Minnesota_Timberwolves_logo.svg.png?raw=true",
+  "New Orleans Pelicans" = "https://raw.githubusercontent.com/ThomasFlynner/Nba-Logos/558e464b6d128c09b9c8e4db5695f956197746ed/New_Orleans_Pelicans_logo.svg",
+  "Oklahoma City Thunder" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Oklahoma_City_Thunder.svg.png?raw=true",
+  "Philadelphia 76ers" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Philadelphia-76ers-Logo-1977-1996.png?raw=true",
+  "Phoenix Suns" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Phoenix_Suns_logo.svg.png?raw=true",
+  "Portland Trail Blazers"="https://github.com/ThomasFlynner/Nba-Logos/blob/main/Portland_Trail_Blazers_logo.svg.png?raw=true",
+  "Sacramento Kings"= "https://github.com/ThomasFlynner/Nba-Logos/blob/main/SacramentoKings.svg.png?raw=true",
+  "San Antonio Spurs" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/San_Antonio_Spurs.svg.png?raw=true",
+  "Toronto Raptors" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Toronto_Raptors_logo.svg.png?raw=true",
+  "Utah Jazz" = "https://raw.githubusercontent.com/ThomasFlynner/Nba-Logos/50e066b3e3f7ec4834025ac0eb19333a34e1748d/Utah_Jazz_logo_2022.svg",
+  "Washington Wizards" = "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Washington_Wizards_logo.svg.png?raw=true"
+)
+
+# Getting the trip sequence number and generating popup content for each trip
+filtered_df_unique <- filtered_df_unique %>%
+  mutate(
+    trip_order = row_number(),  # Adds a trip sequence number
+    popup_content = paste("<strong>Trip #:</strong>", trip_order,
+                          "<br><strong>Arena:</strong>", arena_name,
+                          "<br><strong>City:</strong>", arena_city,
+                          "<br><strong>Game Details:</strong>", game_selection,
+                          sep = ""),
+    Logo_URL = team_logos[Full_Home_Team]  # Assign logo URLs based on full home team names
+  )
+
+# Function to create custom icons for each team
+Icon_function <- function(url) {
+  makeIcon(
+    iconUrl = url,  # URL of the icon image
+    iconWidth = 40,  # Width of the icon image
+    iconHeight = 40,  # Height of the icon image
+    iconAnchorX = 17.5,  # X-coordinate of the icon anchor point
+    iconAnchorY = 17.5  # Y-coordinate of the icon anchor point
+  )
+}
+
+# getting the visit count for each arena
+filtered_df_aggregated <- filtered_df_unique %>%
+  group_by(arena_name, arena_city, lon, lat) %>% 
+  summarise(
+    details = paste(paste("<strong>Trip #:</strong>", trip_order, "<br><strong>Game:</strong>", game_selection,"<br><strong>Arena:</strong>", arena_name), collapse = "<br><br>"),  # trip details for each visit
+    visit_count = n(),  # counting the number of visits to each arena
+    .groups = 'drop'  
+  ) %>%
+  # Join to get the logo URL
+  left_join(filtered_df_unique %>% select(arena_name, arena_city, Logo_URL) %>% distinct(), by = c("arena_name", "arena_city"))
+
+# Have popup content to include visit count
+filtered_df_aggregated <- filtered_df_aggregated %>%
+  mutate(popup_content = paste(details, "<br><strong>Visits:</strong>", visit_count))
+
+# getting unique visit counts
+unique_visits <- sort(unique(filtered_df_aggregated$visit_count))
+```
+
+
+Code for Map
+```{r Map}
+map <- leaflet(filtered_df_aggregated) %>%
+  addTiles() # Add default OpenStreetMap tile layer
+
+# looping through each unique visit count to create a layer
+for(visit_count in unique_visits) {
+  data_subset <- filtered_df_aggregated %>% filter(visit_count == !!visit_count)
+  
+  layer_name <- if(visit_count == 1) {
+    paste("Visited", visit_count, "time")  # label for 1 visit
+  } else {
+    paste("Visited", visit_count, "times")  # label for more than 1 visit
+  }
+  
+  # custom markers for each data point in the subset
+  for(i in 1:nrow(data_subset)) {
+    row <- data_subset[i, ]
+    customIcon <- Icon_function(row$Logo_URL) 
+    
+    map <- map %>%
+      addMarkers(
+        lng = row$lon, lat = row$lat,
+        popup = row$popup_content,
+        icon = customIcon,
+        group = layer_name
+      )
+  }
+}
+# Adding a separate layer for the travel path and having it hide by default until selected
+map <- map %>%
+  addPolylines(data = filtered_df_unique, lng = ~lon, lat = ~lat, color = "blue", weight = 2, opacity = 0.7, group = "Overall Travel Path") %>%
+  hideGroup("Overall Travel Path")  # Hide the travel path group
+
+# layer control to change between visit count layers and the travel path
+map <- map %>%
+  addLayersControl(
+    overlayGroups = c("Overall Travel Path", sapply(unique_visits, function(vc) {
+      if(vc == 1) {
+        paste("Visited", vc, "time")
+      } else {
+        paste("Visited", vc, "times")
+      }
+    })),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+
+map
+
+```
+
+
+This is the code for the last plot. It is an animated plot displaying how each players total points accumulated throughout the season. It takes a good few seconds to run so give it time.
+```{r Animated Plot}
+
+# getting points for each shot
+filtered_df <- filtered_df %>%
+  mutate(Points = ifelse(SHOT_TYPE == "2PT Field Goal" & SHOT_MADE == TRUE, 2,  # 2 points for made 2-point fshot
+                         ifelse(SHOT_TYPE == "3PT Field Goal" & SHOT_MADE == TRUE, 3, 0)))  #3 points for made 3-point shot
+
+# cumulative points for each player by game date
+cumulative_points <- filtered_df %>%
+  group_by(PLAYER_NAME, GAME_DATE) %>%  # Group the data by player name and game date
+  summarise(TotalPoints = sum(Points), .groups = 'drop') %>%  # getting total points scored in each game
+  arrange(PLAYER_NAME, GAME_DATE) %>% 
+  group_by(PLAYER_NAME) %>%  
+  mutate(CumulativePoints = cumsum(TotalPoints))  # getting cumulative points for each player over all games
+logo_path <- "https://github.com/ThomasFlynner/Nba-Logos/blob/main/Denver_Nuggets.svg.png?raw=true" 
+logo <- image_read(logo_path)  # read the logo image file
+logo <- image_scale(logo, "100x100")  # resize the logo to 100x100 pixels
+
+# getting the last game played by each player
+last_game <- cumulative_points %>%
+  group_by(PLAYER_NAME) %>%  
+  filter(row_number() == n()) %>%  # Filter only the rows that correspond to the last game for each player
+  ungroup()
+
+# making a label to show the players name and cumulative points for their last game
+last_game <- last_game %>%
+  mutate(Label = paste(PLAYER_NAME, CumulativePoints, sep=": "))  # Create the label by combining player name and cumulative points
+
+
+# the maximum cumulative points and round it up to the nearest 250
+max_cumulative_points <- ceiling(max(cumulative_points$CumulativePoints) / 250) * 250
+
+# breaks based on cumulative points ranges with an increment of 250
+breaks <- seq(0, max_cumulative_points, by = 250)
+
+
+plot7 <- ggplot(cumulative_points, aes(x = GAME_DATE, y = CumulativePoints, group = PLAYER_NAME)) +  #  ggplot with GAME_DATE on the x-axis and CumulativePoints on the y-axis
+  geom_line(aes(color = PLAYER_NAME), size = 0.75) +  # Add lines connecting points for each player, coloured by player name
+  geom_point(aes(size = CumulativePoints, color = PLAYER_NAME), alpha = 0.55) +  # Add points for each game, sized by CumulativePoints and coloured by player name
+  scale_size_continuous(name = "Cumulative Points", breaks = breaks, range = c(3, 12)) +  # Customize size legend with breaks and range 
+  scale_color_discrete(name = "Player") +  
+  labs(title = 'Season Progression of Total Points by Player',  # Add title and axis labels
+       x = 'Game Date', y = 'Cumulative Points') +
+  theme_minimal() +  # minimal theme
+  theme(legend.position = "bottom",
+  axis.title.y = element_text(size = 14),
+  axis.title.x = element_text(size = 14),#  font size of y-axis label
+  plot.title = element_text(size = 16),
+  axis.text.x = element_text(size = 12),   # Adjust x-axis text size
+  axis.text.y = element_text(size = 12))+  # the legend at the bottom
+  guides(color = guide_legend(override.aes = list(alpha = 1)),  # full opacity for legend colours
+         size = guide_legend(title = "Cumulative Points", label.theme = element_text(size = 9)))  #point size
+
+
+plot7 <- plot7 + scale_y_continuous(
+  name = "Cumulative Points",
+  breaks = seq(0, max_cumulative_points, by = 250)  # Set breaks for y-axis
+)
+
+# Show each player's name at their finishing point
+plot7 <- plot7 + geom_text_repel(data = last_game,  
+                         aes(label = Label, x = GAME_DATE, y = CumulativePoints),  # Defining label, x, and y coords
+                         nudge_y = 25,  # Adjust y position of labels
+                         box.padding = 0.35,  # the padding around text box
+                         point.padding = 0.5,  # padding around points
+                         segment.color = 'grey50',  # colour for connecting lines
+                         fontface = "bold", size =4, segment.size= 1)  # font style 
+
+# Add custom logo to the plot
+plot7 <- plot7 + annotation_custom(grid::rasterGrob(logo,  # Add custom logo to the plot
+                                            width = unit(1.5, "inch"), height = unit(1.5, "inch")),  # width and height of the logo
+                           xmin = as.Date("2022-10-19"), xmax = as.Date("2022-11-13"), ymin = 1000, ymax = 1500)  #position for the logo
+
+# Animate the graph
+animated_graph <- plot7 + 
+  transition_reveal(GAME_DATE) +  # Animate the graph based on GAME_DATE
+  ease_aes('linear') +  # the animation easing set to linear
+  labs(subtitle = 'Date: {frame_along}')+
+  theme(plot.subtitle = element_text(size = 14))  #subtitle to show the current date during animation
+
+#the animation
+animate(animated_graph, renderer = gifski_renderer(), height = 750, width = 900, duration = 20, fps = 15, end_pause = 100)
+```
